@@ -27,6 +27,15 @@ def get_client() -> RunPodClient:
 
 def render_header():
     """Render the app header."""
+    # Ẩn menu mặc định, link GitHub và footer của Streamlit
+    st.markdown("""
+        <style>
+        #MainMenu {visibility: hidden;}
+        header {visibility: hidden;}
+        footer {visibility: hidden;}
+        </style>
+    """, unsafe_allow_html=True)
+    
     st.title("RunPod Flash - Speech to Text Demo")
     st.caption(
         "Transcribe audio using faster-whisper (large-v3-turbo) "

@@ -70,44 +70,50 @@ def render_audio_input():
 
 def render_timing_metrics(timing: dict, output: dict):
     """Render latency metrics as Streamlit metric cards."""
-    st.subheader("Latency Breakdown")
+    st.markdown("### ⏱Latency Breakdown")
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Latency", f"{timing['total_latency']:.3f}s")
-    c2.metric("Queue Time", f"{timing['queue_time']:.3f}s")
-    c3.metric("Execution Time", f"{timing['execution_time']:.3f}s")
-    c4.metric("Network Overhead", f"{timing['network_overhead']:.3f}s")
+    with st.container(border=True):
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Latency", f"{timing['total_latency']:.3f}s")
+        c2.metric("Queue Time", f"{timing['queue_time']:.3f}s")
+        c3.metric("Execution Time", f"{timing['execution_time']:.3f}s")
+        c4.metric("Network Overhead", f"{timing['network_overhead']:.3f}s")
 
-    c5, c6, c7 = st.columns(3)
-    c5.metric("Model Load", f"{output.get('model_load_time', 0):.3f}s")
-    c6.metric("Inference Only", f"{output.get('inference_time', 0):.3f}s")
+        st.divider()
 
-    audio_dur = output.get("audio_duration", 0)
-    infer_time = output.get("inference_time", 0)
-    if audio_dur > 0 and infer_time > 0:
-        rtf = infer_time / audio_dur
-        c7.metric("Realtime Factor", f"{rtf:.2f}x")
-    else:
-        c7.metric("Audio Duration", f"{audio_dur:.1f}s")
+        c5, c6, c7, c8 = st.columns(4)
+        c5.metric("Model Load", f"{output.get('model_load_time', 0):.3f}s")
+        c6.metric("Inference Only", f"{output.get('inference_time', 0):.3f}s")
+
+        audio_dur = output.get("audio_duration", 0)
+        infer_time = output.get("inference_time", 0)
+        if audio_dur > 0 and infer_time > 0:
+            rtf = infer_time / audio_dur
+            c7.metric("Realtime Factor", f"{rtf:.2f}x")
+        else:
+            c7.metric("Audio Duration", f"{audio_dur:.1f}s")
 
 
 def render_transcription_result(result: dict):
     """Render transcription text and segment details."""
     output = result["output"]
 
-    st.subheader("Transcription Result")
-    st.text_area(
-        "Transcribed Text",
-        value=output.get("text", ""),
-        height=120,
-        disabled=True,
-    )
+    st.markdown("### Transcription Result")
+    
+    # Use info box instead of disabled text_area for better readability
+    text = output.get("text", "")
+    if text:
+        st.info(text, icon="💬")
+    else:
+        st.warning("No speech detected.")
 
-    col_lang, col_prob, col_dur = st.columns(3)
-    col_lang.metric("Language", output.get("language", "N/A"))
-    col_prob.metric("Confidence", f"{output.get('language_probability', 0):.1%}")
-    col_dur.metric("Audio Duration", f"{output.get('audio_duration', 0):.1f}s")
+    with st.container(border=True):
+        col_lang, col_prob, col_dur = st.columns(3)
+        col_lang.metric("Language", output.get("language", "N/A").upper())
+        col_prob.metric("Confidence", f"{output.get('language_probability', 0):.1%}")
+        col_dur.metric("Audio Duration", f"{output.get('audio_duration', 0):.1f}s")
 
+    st.write("") # Spacer
     render_timing_metrics(result["timing"], output)
 
     # Segment details in expander
@@ -115,7 +121,7 @@ def render_transcription_result(result: dict):
     if segments:
         with st.expander(f"Segments ({len(segments)})"):
             for seg in segments:
-                st.text(f"[{seg['start']:.1f}s - {seg['end']:.1f}s] {seg['text']}")
+                st.markdown(f"**[{seg['start']:.1f}s - {seg['end']:.1f}s]** {seg['text']}")
 
 
 def render_benchmark_stats(stats: dict):
@@ -192,7 +198,7 @@ def render_benchmark_charts(per_request: list):
             font=dict(size=11, color="#e74c3c"),
         )],
     )
-    st.plotly_chart(fig_bar, use_container_width=True)
+    st.plotly_chart(fig_bar, width="stretch")
 
     # Stacked breakdown chart
     st.subheader("Latency Breakdown Per Request")
@@ -219,7 +225,7 @@ def render_benchmark_charts(per_request: list):
         yaxis_title="Time (seconds)",
         height=350,
     )
-    st.plotly_chart(fig_stack, use_container_width=True)
+    st.plotly_chart(fig_stack, width="stretch")
 
 
 def tab_transcribe():
@@ -296,7 +302,7 @@ def tab_benchmark():
             with st.expander("Raw Per-Request Data"):
                 st.dataframe(
                     pd.DataFrame(result["per_request"]),
-                    use_container_width=True,
+                    width="stretch",
                 )
         except Exception as e:
             progress.empty()

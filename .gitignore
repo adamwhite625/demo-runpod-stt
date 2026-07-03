@@ -11,5 +11,6 @@ build/
 .flash/
 runpod_endpoint/.flash/
 runpod_endpoint/.venv/
+runpod_endpoint/.env
 demo.mp3
 test_audio.wav

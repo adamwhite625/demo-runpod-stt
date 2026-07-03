@@ -1,21 +1,21 @@
-"""Streamlit app for RunPod Flash Speech-to-Text demo."""
+"""Streamlit app for RunPod Flash Voice Bot Demo."""
 
-import streamlit as st
+import streamlit as st 
 import pandas as pd
 import plotly.graph_objects as go
+import base64
 
 from runpod_client import RunPodClient
 from benchmark import run_benchmark
 
 st.set_page_config(
-    page_title="RunPod Flash STT Demo",
+    page_title="RunPod Flash Voice Bot",
     page_icon=None,
     layout="wide",
 )
 
 SUPPORTED_FORMATS = ["mp3", "wav", "m4a", "webm", "ogg", "flac"]
 LANGUAGES = {"Vietnamese": "vi", "English": "en", "Auto Detect": None}
-
 
 def get_client() -> RunPodClient:
     """Initialize RunPod client from Streamlit secrets."""
@@ -24,10 +24,8 @@ def get_client() -> RunPodClient:
         endpoint_id=st.secrets["runpod"]["endpoint_id"],
     )
 
-
 def render_header():
     """Render the app header."""
-    # Ẩn menu mặc định, link GitHub và footer của Streamlit
     st.markdown("""
         <style>
         #MainMenu {visibility: hidden;}
@@ -36,46 +34,11 @@ def render_header():
         </style>
     """, unsafe_allow_html=True)
     
-    st.title("RunPod Flash - Speech to Text Demo")
+    st.title("RunPod Flash - Voice Bot AI Demo")
     st.caption(
-        "Transcribe audio using faster-whisper (large-v3-turbo) "
-        "deployed on RunPod Flash serverless GPU."
+        "Powered by Whisper (large-v3-turbo) and XTTS-v2 on a single serverless A5000 GPU. "
+        "Demonstrating GPU-level concurrent batching and multi-model hosting."
     )
-
-
-def render_audio_input():
-    """Render audio input section: file upload and microphone recording."""
-    col_upload, col_mic = st.columns(2)
-
-    with col_upload:
-        st.subheader("Upload Audio File")
-        uploaded = st.file_uploader(
-            "Choose an audio file",
-            type=SUPPORTED_FORMATS,
-            key="audio_upload",
-        )
-
-    with col_mic:
-        st.subheader("Record from Microphone")
-        recorded = st.audio_input("Click to record", key="audio_record")
-
-    # Determine which audio source to use
-    audio_bytes = None
-    source = None
-
-    if uploaded is not None:
-        audio_bytes = uploaded.read()
-        source = uploaded.name
-        uploaded.seek(0)
-        st.audio(uploaded)
-    elif recorded is not None:
-        audio_bytes = recorded.read()
-        source = "Microphone recording"
-        recorded.seek(0)
-        st.audio(recorded)
-
-    return audio_bytes, source
-
 
 def render_timing_metrics(timing: dict, output: dict):
     """Render latency metrics as Streamlit metric cards."""
@@ -83,10 +46,10 @@ def render_timing_metrics(timing: dict, output: dict):
 
     with st.container(border=True):
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total Latency", f"{timing['total_latency']:.3f}s")
-        c2.metric("Queue Time", f"{timing['queue_time']:.3f}s")
-        c3.metric("Execution Time", f"{timing['execution_time']:.3f}s")
-        c4.metric("Network Overhead", f"{timing['network_overhead']:.3f}s")
+        c1.metric("Total Latency", f"{timing.get('total_latency', 0):.3f}s")
+        c2.metric("Queue Time", f"{timing.get('queue_time', 0):.3f}s")
+        c3.metric("Execution Time", f"{timing.get('execution_time', 0):.3f}s")
+        c4.metric("Network Overhead", f"{timing.get('network_overhead', 0):.3f}s")
 
         st.divider()
 
@@ -102,14 +65,12 @@ def render_timing_metrics(timing: dict, output: dict):
         else:
             c7.metric("Audio Duration", f"{audio_dur:.1f}s")
 
-
 def render_transcription_result(result: dict):
     """Render transcription text and segment details."""
     output = result["output"]
 
     st.markdown("### Transcription Result")
     
-    # Use info box instead of disabled text_area for better readability
     text = output.get("text", "")
     if text:
         st.info(text, icon="💬")
@@ -122,19 +83,114 @@ def render_transcription_result(result: dict):
         col_prob.metric("Confidence", f"{output.get('language_probability', 0):.1%}")
         col_dur.metric("Audio Duration", f"{output.get('audio_duration', 0):.1f}s")
 
-    st.write("") # Spacer
-    render_timing_metrics(result["timing"], output)
+    st.write("") 
+    if "timing" in result:
+        render_timing_metrics(result["timing"], output)
 
-    # Segment details in expander
     segments = output.get("segments", [])
     if segments:
         with st.expander(f"Segments ({len(segments)})"):
             for seg in segments:
-                st.markdown(f"**[{seg['start']:.1f}s - {seg['end']:.1f}s]** {seg['text']}")
+                st.markdown(f"**[{seg.get('start', 0):.1f}s - {seg.get('end', 0):.1f}s]** {seg.get('text', '')}")
 
+def tab_stt():
+    """Batch Transcription Tab"""
+    st.subheader("Speech-to-Text (GPU Batched Inference)")
+    st.write("Tải lên một hoặc nhiều file âm thanh. Code backend sẽ gom lại và chạy song song đa luồng trực tiếp trên CUDA bằng CTranslate2.")
+    
+    uploaded_files = st.file_uploader(
+        "Choose audio files",
+        type=SUPPORTED_FORMATS,
+        accept_multiple_files=True,
+        key="audio_upload_batch",
+    )
+    
+    col_lang, _ = st.columns([1, 3])
+    with col_lang:
+        lang_label = st.selectbox("Language", list(LANGUAGES.keys()))
+    language = LANGUAGES[lang_label]
+
+    if not uploaded_files:
+        st.info("Upload files to begin.")
+        return
+
+    if st.button("Transcribe", type="primary"):
+        client = get_client()
+        with st.spinner(f"Transcribing {len(uploaded_files)} files concurrently..."):
+            try:
+                audios_bytes = [f.read() for f in uploaded_files]
+                if len(audios_bytes) == 1:
+                    result = client.transcribe(audios_bytes[0], language=language)
+                    if result.get("status") == "COMPLETED":
+                        if "error" in result["output"]:
+                            st.error(result["output"]["error"])
+                        else:
+                            render_transcription_result(result)
+                    else:
+                        err = result.get("error")
+                        st.error(f"Job failed with status: {result.get('status')}" + (f"\nDetails: {err}" if err else ""))
+                else:
+                    result = client.transcribe_batch(audios_bytes, language=language)
+                    if result.get("status") == "COMPLETED":
+                        out = result["output"]
+                        if "error" in out:
+                            st.error(out["error"])
+                        else:
+                            st.success(f"Batch {len(uploaded_files)} files completed in {out.get('total_batch_time', 0):.2f}s on GPU.")
+                            st.json(result["timing"])
+                            for i, res in enumerate(out.get("batch_results", [])):
+                                with st.expander(f"File: {uploaded_files[i].name} (Inference: {res.get('inference_time',0):.2f}s)"):
+                                    single_res = {"output": res}
+                                    render_transcription_result(single_res)
+                    else:
+                        err = result.get("error")
+                        st.error(f"Batch Job failed with status: {result.get('status')}" + (f"\nDetails: {err}" if err else ""))
+            except Exception as e:
+                st.error(f"Request failed: {e}")
+
+def tab_tts():
+    """Text-to-Speech Tab using VITS (lightweight, no voice cloning required)."""
+    st.subheader("Text-to-Speech (Coqui VITS - Vietnamese)")
+    st.write("Sử dụng Coqui VITS để tổng hợp giọng nói tiếng Việt nhanh, nhẹ, chạy trực tiếp trên GPU.")
+
+    text = st.text_area(
+        "Văn bản cần đọc",
+        "Xin chào! Đây là hệ thống AI tổng hợp giọng nói đang chạy trên RunPod Serverless.",
+        height=120
+    )
+
+    if st.button("Synthesize Speech", type="primary"):
+        if not text:
+            st.warning("Vui lòng nhập văn bản.")
+            return
+
+        client = get_client()
+        with st.spinner("Đang tổng hợp giọng nói trên GPU..."):
+            try:
+                result = client.synthesize_speech(text, language="vi")
+                if result.get("status") == "COMPLETED":
+                    out = result["output"]
+                    if "error" in out:
+                        st.error(f"Model Error: {out['error']}")
+                    else:
+                        st.success(f"Synthesized in {out.get('inference_time', 0):.2f}s")
+                        audio_b64 = out.get("audio_base64")
+                        if audio_b64:
+                            audio_bytes = base64.b64decode(audio_b64)
+                            st.audio(audio_bytes, format="audio/wav")
+                        with st.expander("Latency Details"):
+                            st.json(result["timing"])
+                else:
+                    st.error(f"Job failed with status: {result.get('status')}")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+
+# Reusing the existing benchmark functions...
+# (Omitted render_benchmark_stats and render_benchmark_charts for brevity, assumed unchanged in benchmark logic)
+# Actually, I should include the benchmark tab since it was in the original app.py
 
 def render_benchmark_stats(stats: dict):
-    """Render benchmark aggregate statistics table."""
     st.subheader("Aggregate Statistics")
 
     col1, col2, col3, col4 = st.columns(4)
@@ -149,7 +205,6 @@ def render_benchmark_stats(stats: dict):
     col7.metric("Min", f"{stats['total_latency']['min']:.3f}s")
     col8.metric("Max", f"{stats['total_latency']['max']:.3f}s")
 
-    # Full stats table
     with st.expander("All Statistics"):
         stats_table = {
             "Metric": [
@@ -179,12 +234,8 @@ def render_benchmark_stats(stats: dict):
         }
         st.table(pd.DataFrame(stats_table))
 
-
 def render_benchmark_charts(per_request: list):
-    """Render latency charts from per-request data."""
     df = pd.DataFrame(per_request)
-
-    # Latency per request bar chart
     st.subheader("Latency Per Request")
     fig_bar = go.Figure()
     colors = ["#e74c3c" if i == 0 else "#3498db" for i in range(len(df))]
@@ -199,81 +250,23 @@ def render_benchmark_charts(per_request: list):
         yaxis_title="Latency (seconds)",
         showlegend=False,
         height=350,
-        annotations=[dict(
-            text="Red = cold start",
-            xref="paper", yref="paper",
-            x=0.99, y=0.99,
-            showarrow=False,
-            font=dict(size=11, color="#e74c3c"),
-        )],
     )
     st.plotly_chart(fig_bar, width="stretch")
 
-    # Stacked breakdown chart
     st.subheader("Latency Breakdown Per Request")
     fig_stack = go.Figure()
-    fig_stack.add_trace(go.Bar(
-        x=df["request_num"], y=df["queue_time"],
-        name="Queue Time", marker_color="#f39c12",
-    ))
-    fig_stack.add_trace(go.Bar(
-        x=df["request_num"], y=df["model_load_time"],
-        name="Model Load", marker_color="#e74c3c",
-    ))
-    fig_stack.add_trace(go.Bar(
-        x=df["request_num"], y=df["inference_time"],
-        name="Inference", marker_color="#2ecc71",
-    ))
-    fig_stack.add_trace(go.Bar(
-        x=df["request_num"], y=df["network_overhead"],
-        name="Network", marker_color="#3498db",
-    ))
-    fig_stack.update_layout(
-        barmode="stack",
-        xaxis_title="Request #",
-        yaxis_title="Time (seconds)",
-        height=350,
-    )
+    fig_stack.add_trace(go.Bar(x=df["request_num"], y=df["queue_time"], name="Queue Time", marker_color="#f39c12"))
+    # In multi-model, we might not have model_load_time returned per segment, just inference_time
+    # Let's adjust benchmark to just show execution time vs network
+    fig_stack.add_trace(go.Bar(x=df["request_num"], y=df["execution_time"], name="Execution", marker_color="#2ecc71"))
+    fig_stack.add_trace(go.Bar(x=df["request_num"], y=df["network_overhead"], name="Network", marker_color="#3498db"))
+    fig_stack.update_layout(barmode="stack", xaxis_title="Request #", yaxis_title="Time (seconds)", height=350)
     st.plotly_chart(fig_stack, width="stretch")
 
-
-def tab_transcribe():
-    """Single transcription tab."""
-    audio_bytes, source = render_audio_input()
-
-    col_lang, col_btn = st.columns([1, 3])
-    with col_lang:
-        lang_label = st.selectbox("Language", list(LANGUAGES.keys()))
-    language = LANGUAGES[lang_label]
-
-    if audio_bytes is None:
-        st.info("Upload an audio file or record from your microphone to begin.")
-        return
-
-    st.caption(f"Source: {source} | Size: {len(audio_bytes) / 1024:.1f} KB")
-
-    if st.button("Transcribe", type="primary", key="btn_transcribe"):
-        client = get_client()
-        with st.spinner("Transcribing..."):
-            try:
-                result = client.transcribe(audio_bytes, language=language)
-                if result["status"] == "COMPLETED":
-                    render_transcription_result(result)
-                else:
-                    st.error(f"Job failed with status: {result['status']}")
-            except Exception as e:
-                st.error(f"Request failed: {e}")
-
-
 def tab_benchmark():
-    """Benchmark tab: run N requests and display statistics."""
-    st.subheader("Upload Audio for Benchmark")
-    uploaded = st.file_uploader(
-        "Choose an audio file",
-        type=SUPPORTED_FORMATS,
-        key="bench_upload",
-    )
-
+    st.subheader("Stress Test / Benchmark (STT Single Request Loop)")
+    uploaded = st.file_uploader("Choose an audio file", type=SUPPORTED_FORMATS, key="bench_upload")
+    
     col_n, col_lang = st.columns(2)
     with col_n:
         n_requests = st.slider("Number of requests", 3, 20, 10)
@@ -291,42 +284,29 @@ def tab_benchmark():
     if st.button("Run Benchmark", type="primary", key="btn_benchmark"):
         client = get_client()
         progress = st.progress(0, text="Starting benchmark...")
-
         def on_progress(current, total):
-            progress.progress(
-                current / total,
-                text=f"Request {current}/{total} completed",
-            )
-
+            progress.progress(current / total, text=f"Request {current}/{total} completed")
         try:
-            result = run_benchmark(
-                client, audio_bytes, n_requests, language, on_progress
-            )
+            result = run_benchmark(client, audio_bytes, n_requests, language, on_progress)
             progress.empty()
-
             render_benchmark_stats(result["stats"])
             render_benchmark_charts(result["per_request"])
-
-            # Raw data expander
             with st.expander("Raw Per-Request Data"):
-                st.dataframe(
-                    pd.DataFrame(result["per_request"]),
-                    width="stretch",
-                )
+                st.dataframe(pd.DataFrame(result["per_request"]), width="stretch")
         except Exception as e:
             progress.empty()
             st.error(f"Benchmark failed: {e}")
 
-
 def main():
     """App entry point."""
     render_header()
-    tab1, tab2 = st.tabs(["Transcription", "Benchmark"])
+    tab1, tab2, tab3 = st.tabs(["🎙️ STT Batch", "🔊 TTS Voice Cloning", "📈 Benchmark"])
     with tab1:
-        tab_transcribe()
+        tab_stt()
     with tab2:
+        tab_tts()
+    with tab3:
         tab_benchmark()
-
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,14 @@
+{
+    "files.watcherExclude": {
+        "**/.flash/**": true,
+        "**/runpod_endpoint/.flash/**": true
+    },
+    "files.exclude": {
+        "**/.flash": true,
+        "**/runpod_endpoint/.flash": true
+    },
+    "python.analysis.exclude": [
+        "**/.flash",
+        "**/runpod_endpoint/.flash"
+    ]
+}

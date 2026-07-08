@@ -181,7 +181,8 @@ def tab_tts():
                         with st.expander("Latency Details"):
                             st.json(result["timing"])
                 else:
-                    st.error(f"Job failed with status: {result.get('status')}")
+                    err = result.get("error")
+                    st.error(f"Job failed with status: {result.get('status')}" + (f"\nDetails: {err}" if err else ""))
             except Exception as e:
                 st.error(f"Error: {e}")
 

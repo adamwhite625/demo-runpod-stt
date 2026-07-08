@@ -1,118 +1,112 @@
-"""Client wrapper for calling RunPod serverless endpoint."""
+"""Client wrapper module for interacting with RunPod serverless endpoints using the Flash SDK."""
 
 import base64
 import time
-from typing import List, Optional
-
-import requests
+import os
+import asyncio
+from typing import List
+from runpod_flash import Endpoint
 
 class RunPodClient:
-    """Handles communication with RunPod Voice Bot Engine endpoint."""
+    """Client wrapper handles structured communication with the RunPod Voice Bot Engine."""
 
     def __init__(self, api_key: str, endpoint_id: str):
-        self.api_key = api_key
-        self.base_url = f"https://api.runpod.ai/v2/{endpoint_id}"
-        self.headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        """Initializes the RunPod client configuration.
 
-    def _call_endpoint(self, payload: dict, timeout: int = 120) -> dict:
+        Args:
+            api_key (str): Authentication token for the RunPod API.
+            endpoint_id (str): Target serverless endpoint identifier.
+        """
+        self.endpoint_id = endpoint_id
+        # RunPod Flash SDK implicitly requires the API key via environment variables
+        os.environ["RUNPOD_API_KEY"] = api_key
+
+    async def _call_endpoint_async(self, payload: dict) -> dict:
+
         t_start = time.time()
-        response = requests.post(
-            f"{self.base_url}/runsync",
-            json=payload,
-            headers=self.headers,
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        data = response.json()
-        
-        job_id = data.get("id")
-        status = data.get("status")
-        
-        # Poll if job is taking longer than 90s (Cold Start)
-        while status in ["IN_QUEUE", "IN_PROGRESS"]:
-            time.sleep(5)
-            status_resp = requests.get(
-                f"{self.base_url}/status/{job_id}",
-                headers=self.headers,
-                timeout=30
-            )
-            status_resp.raise_for_status()
-            data = status_resp.json()
-            status = data.get("status")
+        ep = Endpoint(id=self.endpoint_id)
+        job = await ep.run(payload)
+        await job.wait()
 
         total_latency = time.time() - t_start
-
-        delay_ms = data.get("delayTime", 0)
-        exec_ms = data.get("executionTime", 0)
-        queue_time = delay_ms / 1000 if delay_ms else 0
-        execution_time = exec_ms / 1000 if exec_ms else 0
-        network_overhead = max(0, total_latency - queue_time - execution_time)
-
         return {
-            "status": data.get("status"),
-            "output": data.get("output", {}),
-            "error": data.get("error"),
+            "status": job._data.get("status", "COMPLETED"),
+            "output": job.output if isinstance(job.output, dict) else {},
+            "error": job._data.get("error"),
             "timing": {
                 "total_latency": round(total_latency, 3),
-                "queue_time": round(queue_time, 3),
-                "execution_time": round(execution_time, 3),
-                "network_overhead": round(network_overhead, 3),
+                "queue_time": 0,
+                "execution_time": round(total_latency, 3),
+                "network_overhead": 0,
             },
         }
 
+    def _call_endpoint(self, payload: dict) -> dict:
+        """Synchronous block executor wrapping async endpoints for Streamlit runtime interoperability.
+
+        Args:
+            payload (dict): Runtime data to pass over the network layer.
+
+        Returns:
+            dict: Evaluation results map returned by the core serverless handler.
+        """
+        return asyncio.run(self._call_endpoint_async(payload))
+
     def transcribe(self, audio_bytes: bytes, language: str = "vi") -> dict:
-        """STT: Single file"""
+        """Submits a single raw audio segment for Speech-to-Text inference processing.
+
+        Args:
+            audio_bytes (bytes): Binary audio streams extracted via presentation layer forms.
+            language (str, optional): Target language ISO code. Defaults to "vi".
+
+        Returns:
+            dict: Computed text translation mappings and timestamps array payload.
+        """
         audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
         payload = {
-            "input": {
-                "action": "stt",
-                "payload": {
-                    "audio_base64": audio_b64,
-                    "language": language,
-                }
+            "action": "stt",
+            "payload": {
+                "audio_base64": audio_b64,
+                "language": language,
             }
         }
         return self._call_endpoint(payload)
 
     def transcribe_batch(self, audios_bytes: List[bytes], language: str = "vi") -> dict:
-        """STT: Batch multiple files on server"""
+        """Dispatches multiple audio byte segments concurrently to leverage GPU-level batched execution.
+
+        Args:
+            audios_bytes (List[bytes]): List of raw audio binaries gathered from files layout.
+            language (str, optional): Target language ISO code. Defaults to "vi".
+
+        Returns:
+            dict: Compiled aggregate batch results map representing processed instances.
+        """
         audios_b64 = [base64.b64encode(ab).decode("utf-8") for ab in audios_bytes]
         payload = {
-            "input": {
-                "action": "stt",
-                "payload": {
-                    "audio_base64_list": audios_b64,
-                    "language": language,
-                }
-            }
-        }
-        # Batch might take longer
-        return self._call_endpoint(payload, timeout=300)
-
-    def synthesize_speech(self, text: str, language: str = "vi") -> dict:
-        """TTS: Text to speech using Coqui VITS (Vietnamese)."""
-        payload = {
-            "input": {
-                "action": "tts",
-                "payload": {
-                    "text": text,
-                    "language": language,
-                }
+            "action": "stt",
+            "payload": {
+                "audio_base64_list": audios_b64,
+                "language": language,
             }
         }
         return self._call_endpoint(payload)
 
-    def health_check(self) -> bool:
-        """Check if the endpoint is reachable."""
-        try:
-            resp = requests.get(
-                f"{self.base_url}/health",
-                headers=self.headers,
-                timeout=10,
-            )
-            return resp.status_code == 200
-        except requests.RequestException:
-            return False
+    def synthesize_speech(self, text: str, language: str = "vi") -> dict:
+        """Invokes Text-to-Speech (TTS) models to clone or synthesize voice waveforms from strings.
+
+        Args:
+            text (str): Input text paragraph to be verbalized by the backend cluster.
+            language (str, optional): Speech language properties pattern. Defaults to "vi".
+
+        Returns:
+            dict: Output map housing base64-encoded output audio data stream.
+        """
+        payload = {
+            "action": "tts",
+            "payload": {
+                "text": text,
+                "language": language,
+            }
+        }
+        return self._call_endpoint(payload)

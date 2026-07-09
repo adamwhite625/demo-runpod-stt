@@ -7,5 +7,5 @@ mutation deleteEndpoint($id: String!) {
   deleteEndpoint(id: $id)
 }
 '''
-resp = requests.post('https://api.runpod.io/graphql', json={'query': mutation, 'variables': {'id': '888mr1vrmlqbfn'}}, headers=headers)
-print('Deleted 888mr1vrmlqbfn:', resp.json())
+resp = requests.post('https://api.runpod.io/graphql', json={'query': mutation, 'variables': {'id': ''}}, headers=headers)
+print('Deleted: oj89bbcct211pl', resp.json())

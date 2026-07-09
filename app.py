@@ -1,4 +1,4 @@
-"""Streamlit app for RunPod Flash Voice Bot Demo."""
+"""Streamlit app for RunPod Flash Voice Bot Demo (Whisper STT + Piper TTS)."""
 
 import streamlit as st 
 import pandas as pd
@@ -8,11 +8,6 @@ import base64
 from runpod_client import RunPodClient
 from benchmark import run_benchmark
 
-st.set_page_config(
-    page_title="RunPod Flash Voice Bot",
-    page_icon=None,
-    layout="wide",
-)
 
 SUPPORTED_FORMATS = ["mp3", "wav", "m4a", "webm", "ogg", "flac"]
 LANGUAGES = {"Vietnamese": "vi", "English": "en", "Auto Detect": None}
@@ -36,7 +31,7 @@ def render_header():
     
     st.title("RunPod Flash - Voice Bot AI Demo")
     st.caption(
-        "Powered by Whisper (large-v3-turbo) and XTTS-v2 on a single serverless A5000 GPU. "
+        "Powered by Whisper (large-v3-turbo) and Piper TTS on a single serverless RTX 4090 GPU. "
         "Demonstrating GPU-level concurrent batching and multi-model hosting."
     )
 
@@ -86,6 +81,15 @@ def render_transcription_result(result: dict):
     st.write("") 
     if "timing" in result:
         render_timing_metrics(result["timing"], output)
+
+    # Hiển thị Timeline Debug cho STT đơn lẻ
+    if "debug" in output:
+        st.write("")
+        st.subheader("Backend Execution Timeline")
+        if output["debug"].get("timeline"):
+            df = pd.DataFrame(output["debug"]["timeline"])
+            columns_to_show = [col for col in ["stage", "since_request", "since_boot"] if col in df.columns]
+            st.dataframe(df[columns_to_show], use_container_width=True, hide_index=True)
 
     segments = output.get("segments", [])
     if segments:
@@ -138,6 +142,15 @@ def tab_stt():
                         else:
                             st.success(f"Batch {len(uploaded_files)} files completed in {out.get('total_batch_time', 0):.2f}s on GPU.")
                             st.json(result["timing"])
+                            
+                            # Hiển thị Timeline tổng của luồng Batch ở ngoài nếu có
+                            if "debug" in out:
+                                st.subheader("Batch Global Execution Timeline")
+                                if out["debug"].get("timeline"):
+                                    df_batch = pd.DataFrame(out["debug"]["timeline"])
+                                    cols = [c for c in ["stage", "since_request", "since_boot"] if c in df_batch.columns]
+                                    st.dataframe(df_batch[cols], use_container_width=True, hide_index=True)
+
                             for i, res in enumerate(out.get("batch_results", [])):
                                 with st.expander(f"File: {uploaded_files[i].name} (Inference: {res.get('inference_time',0):.2f}s)"):
                                     single_res = {"output": res}
@@ -149,13 +162,13 @@ def tab_stt():
                 st.error(f"Request failed: {e}")
 
 def tab_tts():
-    """Text-to-Speech Tab using VITS (lightweight, no voice cloning required)."""
-    st.subheader("Text-to-Speech (Coqui VITS - Vietnamese)")
-    st.write("Sử dụng Coqui VITS để tổng hợp giọng nói tiếng Việt nhanh, nhẹ, chạy trực tiếp trên GPU.")
+    """Text-to-Speech Tab using Piper VITS (Ultra lightweight & fast)."""
+    st.subheader("Text-to-Speech (Piper VITS - Vietnamese)")
+    st.write("Sử dụng cấu trúc Piper VITS tối ưu tốc độ kết hợp Network Volume để sinh giọng nói tiếng Việt tức thì.")
 
     text = st.text_area(
         "Văn bản cần đọc",
-        "Xin chào! Đây là hệ thống AI tổng hợp giọng nói đang chạy trên RunPod Serverless.",
+        "Xin chào! Hệ thống AI tổng hợp giọng nói Piper đã cấu hình thành công trên GPU RTX 4090.",
         height=120
     )
 
@@ -165,7 +178,7 @@ def tab_tts():
             return
 
         client = get_client()
-        with st.spinner("Đang tổng hợp giọng nói trên GPU..."):
+        with st.spinner("Đang tổng hợp giọng nói qua Piper trên GPU..."):
             try:
                 result = client.synthesize_speech(text, language="vi")
                 if result.get("status") == "COMPLETED":
@@ -173,27 +186,55 @@ def tab_tts():
                     if "error" in out:
                         st.error(f"Model Error: {out['error']}")
                     else:
-                        st.success(f"Synthesized in {out.get('inference_time', 0):.2f}s")
+                        st.success(f"Synthesized in {out.get('inference_time', 0):.3f}s")
                         audio_b64 = out.get("audio_base64")
+                        
+                        # ========================================================
+                        # 💻 ĐOẠN PHẦN THÊM VÀO ĐỂ CONSOLE LOG DEBUG TRÌNH DUYỆT (F12)
+                        # ========================================================
+                        import streamlit.components.v1 as components
+                        
+                        b64_len = len(audio_b64) if audio_b64 else 0
+                        b64_preview = audio_b64[:100] if audio_b64 else "RỖNG"
+                        
+                        js_console_log = f"""
+                        <script>
+                            console.log("%c--- RUNPOD TTS FRONTEND DEBUG ---", "color: #3498db; font-weight: bold; font-size: 12px;");
+                            console.log("Inference Time Backend:", "{out.get('inference_time', 0)}s");
+                            console.log("Chuỗi Base64 Length:", {b64_len});
+                            console.log("100 Ký tự đầu:", "{b64_preview}...");
+                            if ({b64_len} < 100) {{
+                                console.warn("CẢNH BÁO: Chuỗi Base64 có độ dài quá ngắn! Có thể dữ liệu nhị phân WAV bị rỗng.");
+                            }}
+                        </script>
+                        """
+                        components.html(js_console_log, height=0, width=0)
+                        
+                        print(f"\n[DEBUG app.py] Base64 Length nhận về: {b64_len} ký tự.")
+                        print(f"[DEBUG app.py] Preview: {b64_preview}...\n")
+                        # ========================================================
+
                         if audio_b64:
                             audio_bytes = base64.b64decode(audio_b64)
                             st.audio(audio_bytes, format="audio/wav")
+                        
                         with st.expander("Latency Details"):
                             st.json(result["timing"])
+                            if "debug" in out:
+                                st.write("")
+                                st.subheader("Backend Execution Timeline")
+                                if out["debug"].get("timeline"):
+                                    df = pd.DataFrame(out["debug"]["timeline"])
+                                    columns_to_show = [col for col in ["stage", "since_request", "since_boot"] if col in df.columns]
+                                    st.dataframe(df[columns_to_show], use_container_width=True, hide_index=True)
                 else:
                     err = result.get("error")
                     st.error(f"Job failed with status: {result.get('status')}" + (f"\nDetails: {err}" if err else ""))
             except Exception as e:
                 st.error(f"Error: {e}")
 
-
-# Reusing the existing benchmark functions...
-# (Omitted render_benchmark_stats and render_benchmark_charts for brevity, assumed unchanged in benchmark logic)
-# Actually, I should include the benchmark tab since it was in the original app.py
-
 def render_benchmark_stats(stats: dict):
     st.subheader("Aggregate Statistics")
-
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Mean Latency", f"{stats['total_latency']['mean']:.3f}s")
     col2.metric("Median (P50)", f"{stats['total_latency']['median']:.3f}s")
@@ -206,63 +247,13 @@ def render_benchmark_stats(stats: dict):
     col7.metric("Min", f"{stats['total_latency']['min']:.3f}s")
     col8.metric("Max", f"{stats['total_latency']['max']:.3f}s")
 
-    with st.expander("All Statistics"):
-        stats_table = {
-            "Metric": [
-                "Mean", "Median", "Std Dev",
-                "Min", "Max",
-                "P90", "P95", "P99",
-                "Cold Start", "Warm Avg",
-                "Throughput (req/s)", "Realtime Factor",
-                "Audio Duration (s)", "Total Requests",
-            ],
-            "Value": [
-                f"{stats['total_latency']['mean']:.3f}s",
-                f"{stats['total_latency']['median']:.3f}s",
-                f"{stats['total_latency']['std']:.3f}s",
-                f"{stats['total_latency']['min']:.3f}s",
-                f"{stats['total_latency']['max']:.3f}s",
-                f"{stats['total_latency']['p90']:.3f}s",
-                f"{stats['total_latency']['p95']:.3f}s",
-                f"{stats['total_latency']['p99']:.3f}s",
-                f"{stats['cold_start_latency']:.3f}s",
-                f"{stats['warm_avg_latency']:.3f}s",
-                f"{stats['throughput_rps']:.3f}",
-                f"{stats['realtime_factor_mean']:.3f}x",
-                f"{stats['audio_duration']:.1f}",
-                str(stats["n_requests"]),
-            ],
-        }
-        st.table(pd.DataFrame(stats_table))
-
 def render_benchmark_charts(per_request: list):
     df = pd.DataFrame(per_request)
     st.subheader("Latency Per Request")
     fig_bar = go.Figure()
     colors = ["#e74c3c" if i == 0 else "#3498db" for i in range(len(df))]
-    fig_bar.add_trace(go.Bar(
-        x=df["request_num"],
-        y=df["total_latency"],
-        marker_color=colors,
-        name="Total Latency",
-    ))
-    fig_bar.update_layout(
-        xaxis_title="Request #",
-        yaxis_title="Latency (seconds)",
-        showlegend=False,
-        height=350,
-    )
+    fig_bar.add_trace(go.Bar(x=df["request_num"], y=df["total_latency"], marker_color=colors))
     st.plotly_chart(fig_bar, width="stretch")
-
-    st.subheader("Latency Breakdown Per Request")
-    fig_stack = go.Figure()
-    fig_stack.add_trace(go.Bar(x=df["request_num"], y=df["queue_time"], name="Queue Time", marker_color="#f39c12"))
-    # In multi-model, we might not have model_load_time returned per segment, just inference_time
-    # Let's adjust benchmark to just show execution time vs network
-    fig_stack.add_trace(go.Bar(x=df["request_num"], y=df["execution_time"], name="Execution", marker_color="#2ecc71"))
-    fig_stack.add_trace(go.Bar(x=df["request_num"], y=df["network_overhead"], name="Network", marker_color="#3498db"))
-    fig_stack.update_layout(barmode="stack", xaxis_title="Request #", yaxis_title="Time (seconds)", height=350)
-    st.plotly_chart(fig_stack, width="stretch")
 
 def tab_benchmark():
     st.subheader("Stress Test / Benchmark (STT Single Request Loop)")
@@ -280,8 +271,6 @@ def tab_benchmark():
         return
 
     audio_bytes = uploaded.read()
-    st.caption(f"File: {uploaded.name} | Size: {len(audio_bytes) / 1024:.1f} KB")
-
     if st.button("Run Benchmark", type="primary", key="btn_benchmark"):
         client = get_client()
         progress = st.progress(0, text="Starting benchmark...")
@@ -292,8 +281,6 @@ def tab_benchmark():
             progress.empty()
             render_benchmark_stats(result["stats"])
             render_benchmark_charts(result["per_request"])
-            with st.expander("Raw Per-Request Data"):
-                st.dataframe(pd.DataFrame(result["per_request"]), width="stretch")
         except Exception as e:
             progress.empty()
             st.error(f"Benchmark failed: {e}")
@@ -301,7 +288,7 @@ def tab_benchmark():
 def main():
     """App entry point."""
     render_header()
-    tab1, tab2, tab3 = st.tabs(["🎙️ STT Batch", "🔊 TTS Voice Cloning", "📈 Benchmark"])
+    tab1, tab2, tab3 = st.tabs(["🎙️ STT Batch", "🔊 TTS VITS (Tiếng Việt)", "📈 Benchmark"])
     with tab1:
         tab_stt()
     with tab2:
